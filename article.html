@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>30s English News - 記事詳細</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- 記事詳細画面 -->
+    <div id="articleDetailScreen" class="screen active">
+        <div class="detail-header">
+            <div class="container">
+                <button class="back-btn" id="backBtn">← 戻る</button>
+                <div class="article-controls">
+                    <div class="voice-selection">
+                        <button class="voice-btn" id="voiceBtn">🗣️ US Male</button>
+                    </div>
+                    <button class="play-btn" id="playBtn">🔊 音声再生</button>
+                    <button class="speed-btn" id="speedBtn">1.0x</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="container">
+            <div class="article-content" id="articleContent">
+                <!-- 記事詳細がここに動的に追加される -->
+            </div>
+        </div>
+    </div>
+
+    <script src="article.js"></script>
+</body>
+</html>

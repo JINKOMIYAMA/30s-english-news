@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>30s English News - ニュース一覧</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- ニュース一覧画面 -->
+    <div id="newsListScreen" class="screen active">
+        <div class="news-header">
+            <div class="header-content">
+                <h2 class="news-title">📰 あなた専用の英語ニュース</h2>
+                <div class="user-settings">
+                    <span class="level-badge" id="currentLevel">初心者</span>
+                    <button class="settings-btn" id="settingsBtn">⚙️</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="container">
+            <div class="loading-spinner" id="loadingSpinner" style="display: none;">
+                <div class="news-loading-container">
+                    <div class="news-loading-icon">📰</div>
+                    <div class="news-loading-dots">
+                        <span class="loading-dot"></span>
+                        <span class="loading-dot"></span>
+                        <span class="loading-dot"></span>
+                    </div>
+                    <p class="loading-message">ニュースを更新中...</p>
+                    <div class="loading-progress">
+                        <div class="progress-bar"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="news-grid" id="newsGrid">
+                <!-- ニュースカードがここに動的に追加される -->
+            </div>
+            
+            <div class="refresh-section">
+                <button class="refresh-btn" id="refreshBtn">🔄 新しいニュースを取得</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="news-list.js"></script>
+</body>
+</html>
