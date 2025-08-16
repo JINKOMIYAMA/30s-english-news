@@ -60,4 +60,20 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`📱 Access at: http://localhost:${PORT}`);
     console.log(`🌐 Network access: http://192.168.179.21:${PORT}`);
     console.log(`🔧 Environment: ${process.env.NODE_ENV}`);
+    
+    // 本番環境でのスリープ対策
+    if (process.env.NODE_ENV === 'production') {
+        const RENDER_URL = process.env.RENDER_EXTERNAL_URL || `https://30s-english-news.onrender.com`;
+        
+        setInterval(async () => {
+            try {
+                const response = await fetch(`${RENDER_URL}/health`);
+                console.log(`⏰ Keep-alive ping: ${response.status}`);
+            } catch (error) {
+                console.log(`⏰ Keep-alive failed: ${error.message}`);
+            }
+        }, 14 * 60 * 1000); // 14分毎にping
+        
+        console.log(`⏰ Keep-alive timer started (14min intervals)`);
+    }
 });
