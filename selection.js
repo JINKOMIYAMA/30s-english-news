@@ -38,36 +38,15 @@ categoryCards.forEach(card => {
     card.addEventListener('click', () => {
         const category = card.dataset.category;
         
-        // "All Categories"が選択された場合
-        if (category === 'all') {
-            if (card.classList.contains('selected')) {
-                // 既に選択されている場合は解除
-                card.classList.remove('selected');
-                AppState.selectedCategories = AppState.selectedCategories.filter(c => c !== 'all');
-            } else {
-                // 他のすべてのカテゴリーを解除してAll Categoriesのみ選択
-                categoryCards.forEach(c => c.classList.remove('selected'));
-                card.classList.add('selected');
-                AppState.selectedCategories = ['all'];
-            }
+        // カテゴリーの選択/解除を切り替え
+        if (card.classList.contains('selected')) {
+            // 既に選択されている場合は解除
+            card.classList.remove('selected');
+            AppState.selectedCategories = AppState.selectedCategories.filter(c => c !== category);
         } else {
-            // 通常のカテゴリーが選択された場合
-            if (card.classList.contains('selected')) {
-                // 既に選択されている場合は解除
-                card.classList.remove('selected');
-                AppState.selectedCategories = AppState.selectedCategories.filter(c => c !== category);
-            } else {
-                // "All Categories"が選択されている場合は解除
-                const allCategoryCard = document.querySelector('[data-category="all"]');
-                if (allCategoryCard.classList.contains('selected')) {
-                    allCategoryCard.classList.remove('selected');
-                    AppState.selectedCategories = [];
-                }
-                
-                // 新しいカテゴリーを追加
-                card.classList.add('selected');
-                AppState.selectedCategories.push(category);
-            }
+            // 新しいカテゴリーを追加
+            card.classList.add('selected');
+            AppState.selectedCategories.push(category);
         }
         
         // 次へボタンの有効/無効を更新
