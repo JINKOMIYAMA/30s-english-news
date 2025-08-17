@@ -232,7 +232,18 @@ async function searchNewsFromSource(sourceQuery) {
             throw new Error(`No news items in ${sourceName} RSS feed`);
         }
     } catch (error) {
-        console.error(`❌ ${source} RSS error:`, error.message);
+        console.error(`❌ ${source} RSS error:`, {
+            message: error.message,
+            stack: error.stack,
+            url: url,
+            source: source
+        });
+        
+        // より詳細なエラー情報を出力
+        if (error.response) {
+            console.error(`HTTP Response:`, error.response.status, error.response.statusText);
+        }
+        
         throw new Error(`${source} RSS failed: ${error.message}`);
     }
 }
@@ -259,19 +270,41 @@ function filterYouthInterestNews(items, source) {
     ];
     
     return items.filter(item => {
-        // タイトルとコンテンツの安全な取得
-        const title = (item.title || '').toLowerCase();
-        const content = (item.contentSnippet || item.content || '').toLowerCase();
-        
-        // 空のタイトルまたはコンテンツをスキップ
-        if (!title && !content) {
+        try {
+            // デバッグ情報を追加
+            console.log(`🔍 フィルタリング中: item =`, typeof item, item ? Object.keys(item).slice(0, 5) : 'null/undefined');
+            
+            // アイテムが存在しない場合はスキップ
+            if (!item || typeof item !== 'object') {
+                console.log(`⚠️ 無効なアイテム:`, item);
+                return false;
+            }
+            
+            // タイトルとコンテンツの安全な取得
+            const title = item.title ? String(item.title).toLowerCase() : '';
+            const content = item.contentSnippet ? String(item.contentSnippet).toLowerCase() : 
+                           item.content ? String(item.content).toLowerCase() : '';
+            
+            console.log(`📝 タイトル: "${title.slice(0, 50)}..." コンテンツ: "${content.slice(0, 30)}..."`);
+            
+            // 空のタイトルまたはコンテンツをスキップ
+            if (!title && !content) {
+                console.log(`⚠️ 空のタイトル・コンテンツ`);
+                return false;
+            }
+            
+            const hasKeyword = youthKeywords.some(keyword => {
+                const lowerKeyword = keyword.toLowerCase();
+                return title.includes(lowerKeyword) || content.includes(lowerKeyword);
+            });
+            
+            console.log(`🎯 キーワード該当: ${hasKeyword}`);
+            return hasKeyword;
+            
+        } catch (error) {
+            console.error(`❌ フィルタリングエラー:`, error.message, `item:`, item);
             return false;
         }
-        
-        return youthKeywords.some(keyword => 
-            title.includes(keyword.toLowerCase()) || 
-            content.includes(keyword.toLowerCase())
-        );
     });
 }
 
