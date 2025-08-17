@@ -490,13 +490,12 @@ Transform this Japanese news article into English content suitable for ${config.
 
 Original Article:
 Title: ${article.title_ja}
-Content: ${article.content_ja}
-Description: ${article.description || ''}
+Content: ${(article.content_ja || '').replace(/https?:\/\/[^\s]+/g, '').replace(/www\.[^\s]+/g, '')}
+Description: ${(article.description || '').replace(/https?:\/\/[^\s]+/g, '').replace(/www\.[^\s]+/g, '')}
 Author: ${article.author || ''}
 Source: ${article.source}
 Category: ${article.category}
 Published Date: ${article.published_at}
-URL: ${article.url || ''}
 
 CRITICAL REQUIREMENTS FOR SPECIFICITY AND ACCURACY:
 1. Extract and preserve ALL specific information from the original:
@@ -536,7 +535,10 @@ ABSOLUTE REQUIREMENTS:
 - Extract maximum concrete details from the original Japanese content
 - Use vocabulary appropriate for ${config.cefr} level
 - Make sentences ${config.complexity} but clear
-- Ensure en_body is exactly 100-150 words and flows naturally`;
+- The en_body MUST be between 100-150 words - count carefully and expand content if needed
+- Add relevant context, background information, or additional details to reach the required word count
+- If the original article is short, expand with related context while staying factually accurate
+- CRITICAL: Check word count before finishing - the article must not be shorter than 100 words`;
 
     try {
         console.log(`🤖 記事整形API呼び出し中... (${config.cefr}レベル, ${wordCountMin}-${wordCountMax}語)`);
@@ -546,7 +548,7 @@ ABSOLUTE REQUIREMENTS:
             messages: [
                 {
                     role: 'system',
-                    content: `You are an expert English language learning content creator specializing in creating SPECIFIC and CONCRETE news articles. CRITICAL: You must extract and include ALL specific details from the original Japanese article - every name, date, location, number, and concrete fact. Never use vague terms like "someone", "a company", "recently" - always use the specific names and dates from the original. Your goal is to create detailed, factual English content for ${config.cefr} level learners. Always return valid JSON only, no other text.`
+                    content: `You are an expert English language learning content creator specializing in creating SPECIFIC and CONCRETE news articles. CRITICAL REQUIREMENTS: 1) Extract and include ALL specific details from the original Japanese article - every name, date, location, number, and concrete fact. 2) The en_body MUST be between 100-150 words - count carefully and expand with relevant context if needed. 3) Never use vague terms like "someone", "a company", "recently" - always use specific names and dates. 4) If the original article is short, add relevant background information to reach the required word count while staying factually accurate. Your goal is to create detailed, factual English content for ${config.cefr} level learners. Always return valid JSON only, no other text.`
                 },
                 {
                     role: 'user',
@@ -925,7 +927,13 @@ router.post('/generate-audio-translation', async (req, res) => {
 // TTS音声生成関数（音声タイプ対応）
 async function generateTTS(text, level, voice = 'alloy') {
     try {
-        const baseURL = process.env.BASE_URL || 'http://localhost:3000';
+        // 本番環境では外部URLを使用、開発環境ではローカル
+        const baseURL = process.env.NODE_ENV === 'production' 
+            ? (process.env.RENDER_EXTERNAL_URL || 'https://three0s-english-news.onrender.com')
+            : 'http://localhost:3000';
+        
+        console.log(`🎵 TTS API呼び出し: ${baseURL}/api/tts/generate`);
+        
         const response = await fetch(`${baseURL}/api/tts/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
