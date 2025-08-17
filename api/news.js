@@ -259,8 +259,14 @@ function filterYouthInterestNews(items, source) {
     ];
     
     return items.filter(item => {
-        const title = item.title.toLowerCase();
+        // タイトルとコンテンツの安全な取得
+        const title = (item.title || '').toLowerCase();
         const content = (item.contentSnippet || item.content || '').toLowerCase();
+        
+        // 空のタイトルまたはコンテンツをスキップ
+        if (!title && !content) {
+            return false;
+        }
         
         return youthKeywords.some(keyword => 
             title.includes(keyword.toLowerCase()) || 
