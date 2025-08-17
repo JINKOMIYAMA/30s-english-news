@@ -1,21 +1,29 @@
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
+const Parser = require('rss-parser');
 const router = express.Router();
+
+const parser = new Parser();
+
+// ニュースローテーション管理
+let newsHistory = [];
+const MAX_HISTORY = 15; // 履歴保持数
+let lastResetDate = null; // 最後にリセットした日付
 
 // カテゴリ別検索キーワード
 const CATEGORY_KEYWORDS = {
-    lifestyle: "local news, lifestyle, daily life Japan recent",
-    society: "society, culture, community Japan news recent",
-    economy: "economy, business, finance Japan news recent", 
-    entertainment: "entertainment, celebrity, movies, music Japan news recent",
-    tech: "technology, innovation, gadgets, AI Japan news recent",
-    all: "Japan news latest recent"
+    lifestyle: "Japan lifestyle trending popular viral",
+    society: "Japan society culture trending popular",
+    economy: "Japan economy business trending", 
+    entertainment: "Japan entertainment celebrity movies music anime trending popular viral",
+    tech: "Japan technology innovation trending popular",
+    all: "Japan trending popular viral news"
 };
 
 // レベル別設定
 const LEVEL_CONFIG = {
-    beginner: { wordCount: 1500, speed: 0.9, cefr: "A2", complexity: "simple" },
+    beginner: { wordCount: 600, speed: 0.9, cefr: "A2", complexity: "simple" },
     intermediate: { wordCount: 3000, speed: 1.0, cefr: "B1", complexity: "moderate" },
     advanced: { wordCount: 5000, speed: 1.0, cefr: "C1", complexity: "advanced" }
 };
@@ -47,18 +55,37 @@ router.post('/search', async (req, res) => {
         // 検索クエリ生成
         const searchQueries = generateSearchQueries(level, categories);
         
-        // 各カテゴリでニュースを検索
+        // 各カテゴリでニュースを検索（複数回実行して多様性を確保）
         const allArticles = [];
-        for (const query of searchQueries) {
-            const articles = await searchNewsWithGPT(query);
-            allArticles.push(...articles);
+        
+        // 複数ソースから若者向けニュースを取得（より多様性のため増量）
+        const newsSourceQueries = [
+            { source: 'yahoo_entertainment', limit: 5 },
+            { source: 'yahoo_sports', limit: 5 }, 
+            { source: 'nhk', limit: 5 },
+            { source: 'yahoo_general', limit: 5 },
+            { source: 'asahi', limit: 5 }
+        ];
+        
+        for (const sourceQuery of newsSourceQueries) {
+            try {
+                const articles = await searchNewsFromSource(sourceQuery);
+                allArticles.push(...articles);
+            } catch (error) {
+                console.log(`⚠️ ${sourceQuery.source} RSS取得失敗: ${error.message}`);
+            }
         }
         
         // 重複排除
         const uniqueArticles = removeDuplicateArticles(allArticles);
         
-        // 5件に制限
-        const selectedArticles = uniqueArticles.slice(0, process.env.MAX_ARTICLES || 5);
+        // ニュースローテーション適用
+        const rotatedArticles = applyNewsRotation(uniqueArticles);
+        
+        // 5件を確保
+        let selectedArticles = rotatedArticles.slice(0, 5);
+        
+        console.log(`📰 重複排除後: ${uniqueArticles.length}件, ローテーション後: ${rotatedArticles.length}件, 選択: ${selectedArticles.length}件`);
         
         // 軽量化: 記事タイトルのみ英語化（詳細は後で）
         const lightweightArticles = [];
@@ -68,6 +95,9 @@ router.post('/search', async (req, res) => {
         }
         
         console.log(`✅ Found ${lightweightArticles.length} articles`);
+        
+        // ニュース履歴を更新
+        updateNewsHistory(lightweightArticles);
         
         res.json({
             success: true,
@@ -111,7 +141,7 @@ function generateSearchQueries(level, categories) {
                 keywords: CATEGORY_KEYWORDS[category] || CATEGORY_KEYWORDS.all,
                 date: today,
                 level: level,
-                limit: Math.ceil(5 / categories.length)
+                limit: 5 // 各カテゴリから十分な数を取得
             });
         });
     }
@@ -119,108 +149,204 @@ function generateSearchQueries(level, categories) {
     return queries;
 }
 
-// GPTでニュース検索
-async function searchNewsWithGPT(query) {
-    console.log(`🔍 GPT検索開始 - カテゴリ: ${query.category}, キーワード: "${query.keywords}"`);
+// 複数ソースからニュース取得（若者向け）
+async function searchNewsFromSource(sourceQuery) {
+    const { source, limit } = sourceQuery;
+    console.log(`🔍 ${source} RSS検索開始`);
     
-    // 1週間前から今日までの期間を計算
-    const today = new Date();
-    const oneWeekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const dateRange = `${oneWeekAgo.getFullYear()}-${String(oneWeekAgo.getMonth() + 1).padStart(2, '0')}-${String(oneWeekAgo.getDate()).padStart(2, '0')} to ${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    
-    const prompt = `You are a Japanese news researcher with access to real-time information. Find ${query.limit} ACTUAL, SPECIFIC recent Japanese news articles in the '${query.category}' category.
-
-SEARCH REQUIREMENTS:
-- Time period: ${dateRange} (last 7 days)
-- Category: ${query.category}
-- Keywords: "${query.keywords}"
-- Focus: REAL Japanese news events, government announcements, corporate news, social incidents
-- Sources: Major Japanese media (NHK, Asahi Shimbun, Mainichi, Nikkei, Kyodo News, etc.)
-
-CONTENT REQUIREMENTS:
-- Use ACTUAL recent events in Japan (economic data releases, political decisions, corporate announcements, natural disasters, sports results, entertainment news, technology launches)
-- Include SPECIFIC details: names, numbers, dates, locations, companies
-- Each article should be 800-1200 characters with substantial detail
-- Reference real Japanese organizations, politicians, companies, places
-
-Return JSON array with this structure:
-[
-  {
-    "title_ja": "具体的で詳細な日本語タイトル (実際の事件・発表・出来事)",
-    "url": "https://www3.nhk.or.jp/news/html/20250814/k10014123456000.html",
-    "published_at": "${today.toISOString().split('T')[0]}T09:30:00Z",
-    "summary_ja": "記事の詳細な要約 (200-300文字、具体的な数字・名前・場所を含む)",
-    "content_ja": "詳細な記事内容 (800-1200文字) 実際の日本の出来事として、具体的な人名・企業名・数字・場所・政策内容・発言内容・統計データなど詳細情報を含む完全な記事内容。背景情報、関係者のコメント、今後の見通しも含めること。",
-    "source": "NHKニュース / 朝日新聞デジタル / 日本経済新聞 / 毎日新聞",
-    "category": "${query.category}"
-  }
-]
-
-CRITICAL INSTRUCTIONS:
-- Generate REALISTIC Japanese news as if reporting real events
-- Include specific Japanese names, companies, government ministries, prefectures
-- Use current Japanese context (economic conditions, political situation, social trends)
-- Each article must feel like genuine Japanese journalism
-- Include concrete numbers, percentages, yen amounts, dates
-- Return ONLY the JSON array, no other text`;
-
     try {
-        console.log(`🤖 OpenAI APIに問い合わせ中... モデル: ${process.env.GPT_SEARCH_MODEL || 'gpt-4'}`);
+        let rssUrl, sourceName;
         
-        const response = await openaiClient.post('/chat/completions', {
-            model: process.env.GPT_SEARCH_MODEL || 'gpt-4',
-            messages: [
-                {
-                    role: 'system',
-                    content: 'You are a Japanese news journalist with real-time access to current events. Generate detailed, realistic Japanese news articles with specific facts, names, numbers, and locations. Always return only valid JSON.'
-                },
-                {
-                    role: 'user', 
-                    content: prompt
+        // ソースに応じてRSSフィードを選択
+        switch (source) {
+            case 'yahoo_entertainment':
+                rssUrl = process.env.YAHOO_RSS_ENTERTAINMENT;
+                sourceName = 'Yahoo! エンタメ';
+                break;
+            case 'yahoo_sports':
+                rssUrl = process.env.YAHOO_RSS_SPORTS;
+                sourceName = 'Yahoo! スポーツ';
+                break;
+            case 'yahoo_general':
+                rssUrl = process.env.YAHOO_RSS_URL;
+                sourceName = 'Yahoo! News';
+                break;
+            case 'nhk':
+                rssUrl = process.env.NHK_RSS_URL;
+                sourceName = 'NHK News';
+                break;
+            case 'asahi':
+                rssUrl = process.env.ASAHI_RSS_URL;
+                sourceName = '朝日新聞';
+                break;
+            default:
+                throw new Error(`Unknown source: ${source}`);
+        }
+        
+        // RSSを取得
+        const feed = await parser.parseURL(rssUrl);
+        console.log(`📰 ${sourceName}から${feed.items.length}件のニュースを取得`);
+        
+        if (feed.items && feed.items.length > 0) {
+            // 若者向けニュースフィルタリング
+            let filteredItems = filterYouthInterestNews(feed.items, source);
+            
+            // 記事をフォーマット（日付の妥当性チェック付き）
+            const articles = filteredItems.slice(0, limit).map(item => {
+                let publishedDate = item.pubDate || new Date().toISOString();
+                
+                // 日付の妥当性をチェック
+                try {
+                    const date = new Date(publishedDate);
+                    const now = new Date();
+                    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                    
+                    // 無効な日付や未来の日付、1週間以上古い日付の場合は今日の日付を使用
+                    if (isNaN(date.getTime()) || date > now || date < oneWeekAgo) {
+                        publishedDate = new Date().toISOString();
+                    }
+                } catch (error) {
+                    publishedDate = new Date().toISOString();
                 }
-            ],
-            temperature: 0.2,  // より事実に基づいた生成
-            max_tokens: 4000   // 詳細な内容のためトークン数を倍増
-        });
+                
+                return {
+                    title_ja: item.title,
+                    url: item.link,
+                    published_at: publishedDate,
+                    summary_ja: item.contentSnippet || item.content || item.title,
+                    content_ja: item.content || item.contentSnippet || item.title,
+                    // 追加の詳細情報を保持
+                    description: item.description || '',
+                    author: item.author || '',
+                    guid: item.guid || '',
+                    categories: item.categories || [],
+                    source: sourceName,
+                    category: source.includes('entertainment') ? 'entertainment' : 
+                             source.includes('sports') ? 'sports' : 'general',
+                    isFallback: false // 実際のニュース
+                };
+            });
 
-        console.log(`✅ OpenAI API応答受信 - トークン使用量: ${response.data.usage?.total_tokens || 'N/A'}`);
-        const content = response.data.choices[0].message.content.trim();
-        
-        // JSONのパース
-        let articles;
-        try {
-            // ```json で囲まれている場合の処理
-            const jsonMatch = content.match(/```json\s*(\[.*?\])\s*```/s);
-            if (jsonMatch) {
-                console.log(`📄 JSONブロックから抽出: ${jsonMatch[1].length}文字`);
-                articles = JSON.parse(jsonMatch[1]);
-            } else {
-                console.log(`📄 直接JSONパース: ${content.length}文字`);
-                articles = JSON.parse(content);
-            }
-            console.log(`🎯 ${articles.length}件の記事をGPTから取得`);
-        } catch (parseError) {
-            console.warn(`❌ JSON parse error: ${parseError.message}, フォールバックデータを使用`);
-            console.log(`📝 GPT応答内容: ${content.substring(0, 200)}...`);
-            articles = generateFallbackNewsData(query);
+            return articles;
+        } else {
+            throw new Error(`No news items in ${sourceName} RSS feed`);
         }
-
-        // データ検証
-        if (!Array.isArray(articles)) {
-            throw new Error('Response is not an array');
-        }
-
-        return articles.map(article => ({
-            ...article,
-            id: generateArticleId(article.url, article.title_ja),
-            fetched_at: new Date().toISOString()
-        }));
-
     } catch (error) {
-        console.error(`GPT search error for ${query.category}:`, error.message);
-        // フォールバックデータを返す
-        return generateFallbackNewsData(query);
+        console.error(`❌ ${source} RSS error:`, error.message);
+        throw new Error(`${source} RSS failed: ${error.message}`);
     }
+}
+
+// 若者向けニュースフィルタリング（20代-30代）
+function filterYouthInterestNews(items, source) {
+    // エンタメ・スポーツソースはそのまま
+    if (source.includes('entertainment') || source.includes('sports')) {
+        return items;
+    }
+    
+    // 一般ニュースは若者が興味を持ちそうなキーワードでフィルタ
+    const youthKeywords = [
+        // テクノロジー・IT
+        'AI', '人工知能', 'ChatGPT', 'SNS', 'Twitter', 'Instagram', 'TikTok', 'YouTube', 'ゲーム', 'アプリ', 'スマホ', 'iPhone', 'Android',
+        // エンタメ・文化
+        'アニメ', '漫画', '映画', '音楽', 'アーティスト', '俳優', '女優', 'アイドル', 'K-POP', 'ドラマ', 'Netflix', 'Amazon',
+        // ライフスタイル
+        '恋愛', '結婚', '就職', '転職', '副業', '投資', '仮想通貨', 'バイト', '学生', '大学', '一人暮らし', 'カフェ', 'グルメ', '旅行',
+        // 社会問題（若者関心）
+        '少子化', '年金', '税金', '物価', '給料', '働き方', 'ブラック企業', 'ワークライフバランス', '環境', 'SDGs',
+        // スポーツ・健康
+        'オリンピック', 'ワールドカップ', '野球', 'サッカー', 'バスケ', 'テニス', 'ダイエット', '筋トレ', 'ジム'
+    ];
+    
+    return items.filter(item => {
+        const title = item.title.toLowerCase();
+        const content = (item.contentSnippet || item.content || '').toLowerCase();
+        
+        return youthKeywords.some(keyword => 
+            title.includes(keyword.toLowerCase()) || 
+            content.includes(keyword.toLowerCase())
+        );
+    });
+}
+
+// 日付ベースの履歴リセット
+function checkAndResetDailyHistory() {
+    const today = new Date().toDateString(); // "Mon Dec 25 2023" 形式
+    
+    if (lastResetDate !== today) {
+        console.log(`📅 日付変更検出: ${lastResetDate} → ${today}`);
+        console.log(`🗑️ ニュース履歴をリセットします (${newsHistory.length}件削除)`);
+        
+        // 履歴を完全クリア
+        newsHistory = [];
+        lastResetDate = today;
+        
+        console.log(`✨ 新しい日のニュースローテーション開始`);
+    }
+}
+
+// ニュースローテーション機能（完全に異なるニュースのみ返す）
+function applyNewsRotation(articles) {
+    // まず日付ベースのリセットをチェック
+    checkAndResetDailyHistory();
+    
+    // 履歴と比較して新しいニュースのみを返す
+    const currentUrls = newsHistory.map(item => item.url);
+    
+    // 未使用のニュースのみを抽出
+    const unusedNews = articles.filter(article => !currentUrls.includes(article.url));
+    const usedNews = articles.filter(article => currentUrls.includes(article.url));
+    
+    console.log(`🔄 ローテーション: 未使用 ${unusedNews.length}件, 使用済み ${usedNews.length}件`);
+    
+    // 未使用のニュースが5件以上ある場合はそれのみを返す
+    if (unusedNews.length >= 5) {
+        console.log(`✅ 十分な未使用ニュースあり: ${unusedNews.length}件から5件選択`);
+        return unusedNews;
+    }
+    
+    // 未使用ニュースが5件未満の場合は履歴をクリアして再利用可能にする
+    if (unusedNews.length < 5) {
+        console.log(`⚠️ 未使用ニュース不足: ${unusedNews.length}件のみ。履歴を部分クリアします`);
+        
+        // 履歴の古い半分を削除して再利用可能にする
+        const halfHistorySize = Math.floor(newsHistory.length / 2);
+        const recentHistory = newsHistory.slice(0, halfHistorySize);
+        const clearedUrls = newsHistory.slice(halfHistorySize).map(item => item.url);
+        
+        // 履歴を更新
+        newsHistory = recentHistory;
+        
+        // クリアされた記事を再利用可能として追加
+        const reusableNews = articles.filter(article => 
+            clearedUrls.includes(article.url) || !recentHistory.some(h => h.url === article.url)
+        );
+        
+        console.log(`🔄 履歴クリア後: 利用可能 ${reusableNews.length}件`);
+        
+        return reusableNews;
+    }
+    
+    return unusedNews;
+}
+
+// ニュース履歴を更新
+function updateNewsHistory(selectedArticles) {
+    // まず日付ベースのリセットをチェック
+    checkAndResetDailyHistory();
+    
+    // 新しく選択された記事を履歴に追加
+    const newHistoryItems = selectedArticles.map(article => ({
+        url: article.url,
+        title: article.title_ja,
+        timestamp: new Date().toISOString(),
+        date: new Date().toDateString() // 日付情報も保存
+    }));
+    
+    // 履歴に追加して制限数を超えた場合は古いものを削除
+    newsHistory = [...newHistoryItems, ...newsHistory].slice(0, MAX_HISTORY);
+    
+    console.log(`📚 ニュース履歴更新: ${newsHistory.length}件保持 (日付: ${new Date().toDateString()})`);
 }
 
 // 軽量記事処理（タイトルのみ英語化）
@@ -258,16 +384,21 @@ Return ONLY a simple JSON object:
 
         console.log(`✅ タイトル翻訳完了`);
         const content = response.data.choices[0].message.content.trim();
+        console.log(`📝 GPT-5レスポンス内容:`, content);
         
         let titleData;
         try {
             const jsonMatch = content.match(/\{.*?\}/s);
             if (jsonMatch) {
+                console.log(`📄 JSONマッチ:`, jsonMatch[0]);
                 titleData = JSON.parse(jsonMatch[0]);
             } else {
+                console.log(`📄 直接パース試行`);
                 titleData = JSON.parse(content);
             }
+            console.log(`🎯 パース結果:`, titleData);
         } catch (parseError) {
+            console.log(`❌ JSONパースエラー:`, parseError.message);
             titleData = { en_title: article.title_ja };
         }
 
@@ -280,7 +411,17 @@ Return ONLY a simple JSON object:
         };
 
     } catch (error) {
-        console.error('タイトル処理エラー:', error.message);
+        console.error('❌ タイトル処理エラー詳細:', {
+            message: error.message,
+            status: error.response?.status,
+            statusText: error.response?.statusText,
+            data: error.response?.data,
+            config: {
+                url: error.config?.url,
+                method: error.config?.method,
+                model: process.env.GPT_MODEL
+            }
+        });
         return {
             ...article,
             en_title: article.title_ja,
@@ -295,8 +436,8 @@ async function processArticleContent(article, level) {
     console.log(`📝 記事整形開始: "${article.title_ja}" (レベル: ${level})`);
     
     const config = LEVEL_CONFIG[level];
-    const wordCountMin = Math.floor(config.wordCount * 0.15);
-    const wordCountMax = Math.floor(config.wordCount * 0.25);
+    const wordCountMin = 100;
+    const wordCountMax = 150;
     
     const prompt = `You are an English learning content generator for Japanese students.
 Transform this Japanese news article into English content suitable for ${config.cefr} level learners.
@@ -304,40 +445,52 @@ Transform this Japanese news article into English content suitable for ${config.
 Original Article:
 Title: ${article.title_ja}
 Content: ${article.content_ja}
+Description: ${article.description || ''}
+Author: ${article.author || ''}
 Source: ${article.source}
 Category: ${article.category}
+Published Date: ${article.published_at}
+URL: ${article.url || ''}
+
+CRITICAL REQUIREMENTS FOR SPECIFICITY AND ACCURACY:
+1. Extract and preserve ALL specific information from the original:
+   - Personal names (人名): Keep exact names, convert to English spelling if needed
+   - Company/Organization names (組織名): Preserve exactly
+   - Location names (地名): Keep specific cities, prefectures, countries
+   - Dates and times (日時): Include when events happened (yesterday, today, specific dates)
+   - Numbers and statistics (数値): Ages, amounts, quantities, percentages
+   - Event details (詳細): What specifically happened, where, when, who was involved
+
+2. Make the English article CONCRETE and SPECIFIC:
+   - Use specific names instead of general terms
+   - Include timeframes ("yesterday", "last week", "on August 15th")
+   - Mention exact locations and numbers
+   - Describe specific actions and events
 
 Create learning content with ${config.complexity} language complexity.
 
 Return ONLY this JSON structure:
 {
-  "en_title": "English title (max 80 characters)",
-  "en_body": "English article body (${wordCountMin}-${wordCountMax} words, use ${config.complexity} vocabulary and sentence structures appropriate for ${config.cefr} level)",
+  "en_title": "English title (max 80 characters, include specific names/details)",
+  "en_body": "English article body (${wordCountMin}-${wordCountMax} words, MUST include specific names, dates, locations, numbers from original article)",
   "ja_translation": "Complete Japanese translation of the en_body",
   "vocab_glossary": [
     {
       "headword": "vocabulary word",
-      "pos": "part of speech",
-      "meaning_ja": "Japanese meaning", 
-      "example_en": "Example sentence using the word"
-    }
-  ],
-  "grammar_notes": [
-    {
-      "title": "Grammar point title",
-      "explanation_ja": "Japanese explanation of the grammar rule",
-      "example_en": "English example sentence"
+      "meaning_ja": "Japanese meaning"
     }
   ]
 }
 
-Requirements:
-- Include 8-12 vocabulary items (choose words appropriate for ${config.cefr} level)
-- Include 3-5 grammar points (focus on structures used in the article)
-- Keep proper nouns (names, places) accurate
+ABSOLUTE REQUIREMENTS:
+- Include specific personal names, company names, location names from the original
+- Mention when events occurred (specific dates or timeframes)
+- Include all numerical data (ages, amounts, statistics)
+- Do NOT use vague terms like "a company", "someone", "recently" - use specific names and dates
+- Extract maximum concrete details from the original Japanese content
 - Use vocabulary appropriate for ${config.cefr} level
 - Make sentences ${config.complexity} but clear
-- Ensure en_body flows naturally and is engaging to read`;
+- Ensure en_body is exactly 100-150 words and flows naturally`;
 
     try {
         console.log(`🤖 記事整形API呼び出し中... (${config.cefr}レベル, ${wordCountMin}-${wordCountMax}語)`);
@@ -347,7 +500,7 @@ Requirements:
             messages: [
                 {
                     role: 'system',
-                    content: `You are an expert English language learning content creator. Always return valid JSON only, no other text. Focus on creating engaging content for ${config.cefr} level learners.`
+                    content: `You are an expert English language learning content creator specializing in creating SPECIFIC and CONCRETE news articles. CRITICAL: You must extract and include ALL specific details from the original Japanese article - every name, date, location, number, and concrete fact. Never use vague terms like "someone", "a company", "recently" - always use the specific names and dates from the original. Your goal is to create detailed, factual English content for ${config.cefr} level learners. Always return valid JSON only, no other text.`
                 },
                 {
                     role: 'user',
@@ -401,7 +554,6 @@ Requirements:
 // 重複排除
 function removeDuplicateArticles(articles) {
     const seen = new Set();
-    const titlesSeen = new Set();
     const unique = [];
     
     for (const article of articles) {
@@ -409,12 +561,9 @@ function removeDuplicateArticles(articles) {
         const normalizedUrl = normalizeUrl(article.url);
         const urlHash = hashString(normalizedUrl);
         
-        // タイトル正規化（簡易版）
-        const normalizedTitle = article.title_ja.replace(/\s+/g, '').toLowerCase();
-        
-        if (!seen.has(urlHash) && !titlesSeen.has(normalizedTitle)) {
+        // URL重複のみチェック（タイトル重複は許可）
+        if (!seen.has(urlHash)) {
             seen.add(urlHash);
-            titlesSeen.add(normalizedTitle);
             unique.push(article);
         }
     }
@@ -500,14 +649,15 @@ function generateFallbackNewsData(query) {
 
     return Array.from({length: query.limit}, (_, i) => ({
         title_ja: titles[i % titles.length],
-        url: `https://www3.nhk.or.jp/news/html/20250814/k${10014000000 + Math.floor(Math.random() * 999999)}.html`,
+        url: null, // フォールバックニュースはURLなし
         published_at: new Date(Date.now() - i * 3600000).toISOString(),
         summary_ja: `${titles[i % titles.length]}に関する詳細な最新情報。政府関係者や企業幹部の発言、具体的な数値データ、今後の展望について包括的に報道。`,
         content_ja: detailedContent[query.category]?.[i % detailedContent[query.category].length] || `これは${query.category}カテゴリーの詳細なニュース記事です。具体的な数値、関係者の発言、背景情報を含む包括的な内容となっています。`,
-        source: ['NHKニュース', '朝日新聞デジタル', '日本経済新聞', '毎日新聞'][Math.floor(Math.random() * 4)],
+        source: null, // フォールバックニュースはソースなし
         category: query.category,
         id: generateArticleId(`https://example-news.com/${query.category}/${Date.now()}-${i}`, titles[i % titles.length]),
-        fetched_at: new Date().toISOString()
+        fetched_at: new Date().toISOString(),
+        isFallback: true // フォールバックフラグ
     }));
 }
 
@@ -527,21 +677,15 @@ function generateFallbackProcessedContent(article, config) {
         vocab_glossary: [
             {
                 headword: "development",
-                pos: "noun",
-                meaning_ja: "発展、進歩",
-                example_en: "The development of new technology is exciting."
+                meaning_ja: "発展、進歩"
             },
             {
-                headword: "article",
-                pos: "noun", 
-                meaning_ja: "記事",
-                example_en: "I read an interesting article in the newspaper."
+                headword: "article", 
+                meaning_ja: "記事"
             },
             {
                 headword: "important",
-                pos: "adjective",
-                meaning_ja: "重要な",
-                example_en: "This is important information for students."
+                meaning_ja: "重要な"
             }
         ],
         grammar_notes: [
@@ -555,7 +699,8 @@ function generateFallbackProcessedContent(article, config) {
                 explanation_ja: "受動態は動作の受け手を強調する時に使います。",
                 example_en: "The article was written by an expert."
             }
-        ]
+        ],
+        isFallback: true // フォールバックフラグを継承
     };
 }
 
@@ -599,8 +744,140 @@ router.post('/process-article', async (req, res) => {
     }
 });
 
-// TTS音声生成関数
-async function generateTTS(text, level) {
+
+// 和訳生成エンドポイント
+router.post('/generate-translation', async (req, res) => {
+    try {
+        const { en_body, level } = req.body;
+        
+        if (!en_body || !level) {
+            return res.status(400).json({
+                error: 'Bad Request',
+                message: 'en_body and level are required'
+            });
+        }
+
+        console.log(`📝 和訳生成開始: レベル ${level}`);
+        
+        const config = LEVEL_CONFIG[level];
+        
+        const prompt = `以下の英語ニュース記事を、日本のニュースサイトで読むような自然で読みやすい日本語に翻訳してください。
+
+英語記事:
+"${en_body}"
+
+翻訳要件:
+- 日本人が読んで違和感のない、完全に自然な日本語にする
+- 直訳ではなく、日本語として最も適切で読みやすい表現を選ぶ
+- ニュース記事として自然な文体（丁寧語中心、必要に応じて敬語）
+- 固有名詞は日本で一般的な表記に統一（例：ビリー・アイリッシュ、サクラメント等）
+- 文章の流れを重視し、日本語として読みやすい構成にする
+- 冗長な表現を避け、簡潔で分かりやすい文章にする
+- ${config.cefr}レベルの学習者でも理解しやすい語彙と構文を使用
+
+重要: 機械翻訳的ではなく、日本人記者が書いたような自然な日本語記事にしてください。
+
+JSONフォーマットで返答:
+{
+  "ja_translation": "完全に自然な日本語翻訳"
+}`;
+
+        const response = await openaiClient.post('/chat/completions', {
+            model: process.env.GPT_MODEL || 'gpt-4o-mini',
+            messages: [
+                {
+                    role: 'system',
+                    content: 'あなたは日本の一流新聞社で働く熟練の翻訳者です。英語記事を、日本人読者が読んで全く違和感のない、完全に自然な日本語記事に翻訳してください。直訳ではなく、日本語として最も自然で読みやすい表現を選択し、日本人記者が書いたような文章にしてください。有効なJSONフォーマットで返答してください。'
+                },
+                {
+                    role: 'user',
+                    content: prompt
+                }
+            ],
+            temperature: 0.7, // より自然で多様な表現のために温度を上げる
+            max_tokens: 1500
+        });
+
+        const content = response.data.choices[0].message.content.trim();
+        let translationData;
+        
+        try {
+            const jsonMatch = content.match(/\{.*?\}/s);
+            if (jsonMatch) {
+                translationData = JSON.parse(jsonMatch[0]);
+            } else {
+                translationData = JSON.parse(content);
+            }
+        } catch (parseError) {
+            console.log(`❌ JSONパースエラー:`, parseError.message);
+            translationData = { ja_translation: "翻訳に失敗しました。" };
+        }
+
+        console.log(`✅ 和訳生成完了`);
+        
+        res.json({
+            success: true,
+            ja_translation: translationData.ja_translation,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('Translation generation error:', error);
+        res.status(500).json({
+            error: 'Translation Failed',
+            message: 'Failed to generate translation'
+        });
+    }
+});
+
+// 音声付き和訳生成エンドポイント
+router.post('/generate-audio-translation', async (req, res) => {
+    try {
+        const { en_body, level } = req.body;
+        
+        if (!en_body || !level) {
+            return res.status(400).json({
+                error: 'Bad Request',
+                message: 'en_body and level are required'
+            });
+        }
+
+        console.log(`🎵 音声付き和訳生成開始: レベル ${level}`);
+        
+        // 複数の音声を生成
+        const voiceOptions = {};
+        const voices = ['alloy', 'fable']; // US Male, UK Male
+        
+        for (const voice of voices) {
+            try {
+                const audioUrl = await generateTTS(en_body, level, voice);
+                if (audioUrl) {
+                    voiceOptions[voice] = audioUrl;
+                }
+            } catch (error) {
+                console.log(`⚠️ ${voice} 音声生成失敗: ${error.message}`);
+            }
+        }
+        
+        console.log(`✅ 音声付き和訳生成完了: ${Object.keys(voiceOptions).length}個の音声`);
+        
+        res.json({
+            success: true,
+            voiceOptions: voiceOptions,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('Audio translation generation error:', error);
+        res.status(500).json({
+            error: 'Audio Translation Failed',
+            message: 'Failed to generate audio translation'
+        });
+    }
+});
+
+// TTS音声生成関数（音声タイプ対応）
+async function generateTTS(text, level, voice = 'alloy') {
     try {
         const baseURL = process.env.BASE_URL || 'http://localhost:3000';
         const response = await fetch(`${baseURL}/api/tts/generate`, {
@@ -609,7 +886,7 @@ async function generateTTS(text, level) {
             body: JSON.stringify({
                 text: text,
                 level: level,
-                voice: 'alloy'
+                voice: voice
             })
         });
         

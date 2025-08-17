@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateVoiceButton();
         
         // 和訳・音声が未生成の場合は個別生成
-        if (!AppState.currentArticle.ja_translation || !AppState.currentArticle.voiceOptions) {
+        if (!AppState.currentArticle.ja_translation || !AppState.currentArticle.voiceOptions || !AppState.currentArticle.en_body) {
             console.log('和訳・音声未生成 - 個別生成を実行中...');
             // 個別生成を非同期で実行
             generateTranslationAndAudio(AppState.currentArticle);
@@ -95,7 +95,43 @@ async function generateTranslationAndAudio(article) {
         
         console.log('🔄 和訳・音声生成開始...');
         
-        // 和訳・音声を並列生成
+        // en_bodyが存在しない場合は、まず記事の詳細処理を行う
+        if (!article.en_body) {
+            console.log('📝 en_body未生成 - 記事詳細処理を開始...');
+            
+            const processResponse = await fetch('/api/news/process-article', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    article: article,
+                    level: level
+                })
+            });
+            
+            if (!processResponse.ok) {
+                throw new Error('記事詳細処理エラー');
+            }
+            
+            const processedData = await processResponse.json();
+            if (processedData.success) {
+                // 記事データを更新
+                Object.assign(article, processedData.article);
+                console.log('✅ 記事詳細処理完了');
+            } else {
+                throw new Error('記事詳細処理失敗');
+            }
+        }
+        
+        // en_bodyがまだない場合はエラー
+        if (!article.en_body) {
+            throw new Error('英語本文が生成されませんでした');
+        }
+        
+        // まず英語記事を表示
+        console.log('📄 英語記事を先に表示中...');
+        displayEnglishContentFirst(AppState.currentArticle);
+        
+        // 和訳・音声を並列生成（バックグラウンド）
         const [translationResponse, audioResponse] = await Promise.all([
             fetch('/api/news/generate-translation', {
                 method: 'POST',
@@ -132,10 +168,10 @@ async function generateTranslationAndAudio(article) {
         AppState.allArticles[AppState.currentArticleIndex] = AppState.currentArticle;
         localStorage.setItem('newsArticles', JSON.stringify(AppState.allArticles));
         
-        console.log('✅ 和訳・音声生成完了');
+        console.log('✅ 和訳・音声生成完了 - 日本語コンテンツを追加中...');
         
-        // 更新されたコンテンツを表示
-        displayArticleContent(AppState.currentArticle);
+        // 和訳と音声を追加表示
+        addJapaneseContent(AppState.currentArticle);
         
     } catch (error) {
         console.error('和訳・音声生成エラー:', error);
@@ -149,15 +185,17 @@ async function generateTranslationAndAudio(article) {
 function showLoadingTranslationAudio() {
     articleContent.innerHTML = `
         <div class="article-header">
-            <h1 class="article-title">${AppState.currentArticle.en_title}</h1>
+            <h1 class="article-title-ja">${AppState.currentArticle.title_ja}</h1>
+            <h2 class="article-title-en">${AppState.currentArticle.en_title || '英語タイトル生成中...'}</h2>
         </div>
         <div class="article-body">
-            <div class="english-text">${AppState.currentArticle.en_body}</div>
-            
-            <div style="text-align: center; padding: 2rem; background: #f8f9ff; border-radius: 12px; margin: 1rem 0;">
-                <div style="display: inline-block; width: 30px; height: 30px; border: 3px solid #e3e3e3; border-top: 3px solid #667eea; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-                <h4 style="margin-top: 1rem; color: #667eea;">AI が和訳と音声を生成中...</h4>
-                <p style="color: #666; font-size: 0.9rem;">自然な日本語訳と高品質な音声を準備しています</p>
+            <div style="text-align: center; padding: 3rem; background: #f8f9ff; border-radius: 12px; margin: 1rem 0;">
+                <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid #e3e3e3; border-top: 4px solid #667eea; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                <h3 style="margin-top: 1.5rem; color: #667eea;">AI が英語記事を生成中...</h3>
+                <p style="color: #666; font-size: 1rem; margin: 0.5rem 0;">学習レベルに適した英語記事を作成しています</p>
+                <div style="margin-top: 1rem; font-size: 0.9rem; color: #888;">
+                    ✨ 英語記事 → 🇯🇵 日本語訳 → 🎵 音声の順で生成されます
+                </div>
             </div>
         </div>
         <style>
@@ -182,12 +220,21 @@ function displayArticleContentBasic(article) {
     
     articleContent.innerHTML = `
         <div class="article-header">
-            <h1 class="article-title">${article.en_title}</h1>
+            <h1 class="article-title-ja">${article.title_ja}</h1>
+            <h2 class="article-title-en">${article.en_title}</h2>
             <div class="article-meta-info">
                 <span>📂 ${categoryLabels[article.category]}</span>
                 <span>🕒 ${publishedTime}</span>
                 <span>📖 ${Math.ceil(article.en_body?.split(' ').length / 200) || 1}分</span>
+                ${article.source && !article.isFallback ? `<span>📰 ${article.source}</span>` : ''}
             </div>
+            ${article.url && !article.isFallback ? `
+            <div class="article-source-info" style="margin-top: 1rem; padding: 0.75rem; background: #f5f7fa; border-radius: 8px; border-left: 4px solid #3498db;">
+                <div style="font-size: 0.9rem; color: #555;">
+                    <strong>引用元:</strong> <a href="${article.url}" target="_blank" style="color: #3498db; text-decoration: none;">${article.source}</a>
+                </div>
+            </div>
+            ` : ''}
         </div>
         <div class="article-body">
             <div class="english-text">${article.en_body}</div>
@@ -197,6 +244,110 @@ function displayArticleContentBasic(article) {
             </div>
         </div>
     `;
+}
+
+// 英語記事を先に表示
+function displayEnglishContentFirst(article) {
+    const publishedTime = new Date(article.published_at).toLocaleString('ja-JP');
+    const categoryLabels = {
+        lifestyle: 'ライフスタイル',
+        society: '社会', 
+        economy: '経済',
+        entertainment: 'エンタメ',
+        tech: 'テクノロジー'
+    };
+    
+    // 重要単語を太文字にした英文を作成
+    const highlightedEnglishText = highlightVocabularyInText(article.en_body, article.vocab_glossary);
+    
+    articleContent.innerHTML = `
+        <div class="article-header">
+            <h1 class="article-title-ja">${article.title_ja}</h1>
+            <h2 class="article-title-en">${article.en_title}</h2>
+            <div class="article-meta-info">
+                <span>📂 ${categoryLabels[article.category]}</span>
+                <span>🕒 ${publishedTime}</span>
+                <span>📖 ${Math.ceil(article.en_body?.split(' ').length / 200) || 1}分</span>
+                ${article.source && !article.isFallback ? `<span>📰 ${article.source}</span>` : ''}
+            </div>
+            ${article.url && !article.isFallback ? `
+            <div class="article-source-info" style="margin-top: 1rem; padding: 0.75rem; background: #f5f7fa; border-radius: 8px; border-left: 4px solid #3498db;">
+                <div style="font-size: 0.9rem; color: #555;">
+                    <strong>引用元:</strong> <a href="${article.url}" target="_blank" style="color: #3498db; text-decoration: none;">${article.source}</a>
+                </div>
+            </div>
+            ` : ''}
+        </div>
+        <div class="article-body">
+            <div class="english-text">${highlightedEnglishText}</div>
+            
+            <div id="japanese-content-placeholder" style="margin-top: 2rem;">
+                <div style="text-align: center; padding: 2rem; background: #f8f9ff; border-radius: 12px; border-left: 4px solid #667eea;">
+                    <div style="display: inline-block; width: 30px; height: 30px; border: 3px solid #e3e3e3; border-top: 3px solid #667eea; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                    <h4 style="margin-top: 1rem; color: #667eea;">日本語訳と重要単語を生成中...</h4>
+                    <p style="color: #666; font-size: 0.9rem;">まずは英語記事をお楽しみください</p>
+                </div>
+            </div>
+            
+            ${article.vocab_glossary ? `
+            <div class="vocabulary-section">
+                <h4>📚 重要単語</h4>
+                <div class="vocab-list">
+                    ${article.vocab_glossary?.map(vocab => `
+                        <div class="vocab-item">
+                            <div class="vocab-word">${vocab.headword}</div>
+                            <div class="vocab-meaning">${vocab.meaning_ja}</div>
+                        </div>
+                    `).join('') || ''}
+                </div>
+            </div>
+            ` : ''}
+            
+            ${article.grammar_notes ? `
+            <div class="grammar-section">
+                <h4>📖 文法ポイント</h4>
+                <div class="grammar-list">
+                    ${article.grammar_notes?.map(grammar => `
+                        <div class="grammar-item">
+                            <div class="grammar-title">${grammar.title}</div>
+                            <div class="grammar-explanation">${grammar.explanation_ja}</div>
+                            <div class="grammar-example">${grammar.example_en}</div>
+                        </div>
+                    `).join('') || ''}
+                </div>
+            </div>
+            ` : ''}
+        </div>
+        <style>
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        </style>
+    `;
+}
+
+// 日本語コンテンツを後から追加
+function addJapaneseContent(article) {
+    const placeholder = document.getElementById('japanese-content-placeholder');
+    if (placeholder) {
+        placeholder.innerHTML = `
+            <div class="japanese-translation">
+                <h4>📝 日本語訳</h4>
+                <div class="japanese-text">${article.ja_translation}</div>
+            </div>
+        `;
+        
+        // アニメーション効果を追加
+        placeholder.style.opacity = '0';
+        placeholder.style.transform = 'translateY(20px)';
+        placeholder.style.transition = 'all 0.5s ease';
+        
+        setTimeout(() => {
+            placeholder.style.opacity = '1';
+            placeholder.style.transform = 'translateY(0)';
+        }, 100);
+    }
 }
 
 // 記事詳細コンテンツ表示
@@ -210,17 +361,29 @@ function displayArticleContent(article) {
         tech: 'テクノロジー'
     };
     
+    // 重要単語を太文字にした英文を作成
+    const highlightedEnglishText = highlightVocabularyInText(article.en_body, article.vocab_glossary);
+    
     articleContent.innerHTML = `
         <div class="article-header">
-            <h1 class="article-title">${article.en_title}</h1>
+            <h1 class="article-title-ja">${article.title_ja}</h1>
+            <h2 class="article-title-en">${article.en_title}</h2>
             <div class="article-meta-info">
                 <span>📂 ${categoryLabels[article.category]}</span>
                 <span>🕒 ${publishedTime}</span>
                 <span>📖 ${Math.ceil(article.en_body?.split(' ').length / 200) || 1}分</span>
+                ${article.source && !article.isFallback ? `<span>📰 ${article.source}</span>` : ''}
             </div>
+            ${article.url && !article.isFallback ? `
+            <div class="article-source-info" style="margin-top: 1rem; padding: 0.75rem; background: #f5f7fa; border-radius: 8px; border-left: 4px solid #3498db;">
+                <div style="font-size: 0.9rem; color: #555;">
+                    <strong>引用元:</strong> <a href="${article.url}" target="_blank" style="color: #3498db; text-decoration: none;">${article.source}</a>
+                </div>
+            </div>
+            ` : ''}
         </div>
         <div class="article-body">
-            <div class="english-text">${article.en_body}</div>
+            <div class="english-text">${highlightedEnglishText}</div>
             
             <div class="japanese-translation">
                 <h4>📝 日本語訳</h4>
@@ -232,9 +395,8 @@ function displayArticleContent(article) {
                 <div class="vocab-list">
                     ${article.vocab_glossary?.map(vocab => `
                         <div class="vocab-item">
-                            <div class="vocab-word">${vocab.headword} <em>(${vocab.pos})</em></div>
+                            <div class="vocab-word">${vocab.headword}</div>
                             <div class="vocab-meaning">${vocab.meaning_ja}</div>
-                            <div class="vocab-example">${vocab.example_en}</div>
                         </div>
                     `).join('') || ''}
                 </div>
@@ -508,3 +670,22 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('beforeunload', () => {
     stopAudio();
 });
+
+// 重要単語を太文字にする関数
+function highlightVocabularyInText(text, vocabulary) {
+    if (!text || !vocabulary || vocabulary.length === 0) {
+        return text;
+    }
+    
+    let highlightedText = text;
+    
+    vocabulary.forEach(vocab => {
+        if (vocab.headword) {
+            // 単語境界を考慮した正規表現を作成
+            const regex = new RegExp(`\\b(${vocab.headword})\\b`, 'gi');
+            highlightedText = highlightedText.replace(regex, '<strong>$1</strong>');
+        }
+    });
+    
+    return highlightedText;
+}

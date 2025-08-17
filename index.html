@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>30s English News - 選択</title>
+    <title>30s English News</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <!-- レベル選択画面 -->
-    <div id="levelSelectScreen" class="screen active">
+    <!-- メイン画面 -->
+    <div id="mainScreen" class="screen active">
         <div class="background"></div>
         <div class="container">
             <div class="title-section">
@@ -17,75 +17,24 @@
                     <h1 class="main-title">30s English News</h1>
                     <div class="title-line"></div>
                 </div>
-                <p class="subtitle">ニュースを読みながら英語の勉強をしよう！</p>
+                <p class="subtitle">短いニュースで英語の勉強をしよう！</p>
+                <p class="description">話題のエンタメ・日常ニュースを簡単な英語で読めます</p>
             </div>
             
-            <div class="level-selection">
-                <div class="level-card" data-level="beginner">
-                    <div class="level-icon">📖</div>
-                    <h3>初心者</h3>
-                    <p class="level-description-jp">短くてやさしい文章。英語に自信がなくてもOK。</p>
-                </div>
-                
-                <div class="level-card" data-level="intermediate">
-                    <div class="level-icon">🎯</div>
-                    <h3>中級者</h3>
-                    <p class="level-description-jp">辞書を使いながら理解できるレベル。</p>
-                </div>
-                
-                <div class="level-card" data-level="advanced">
-                    <div class="level-icon">🎤</div>
-                    <h3>上級者</h3>
-                    <p class="level-description-jp">ニュアンスや語感も理解できる本格ニュース。</p>
-                </div>
+            <div class="start-section">
+                <button id="startButton" class="start-button">
+                    <span class="button-icon">🚀</span>
+                    <span class="button-text">ニュースを読む</span>
+                </button>
+                <p class="start-description">
+                    📖 初心者向けの短い英文<br>
+                    🎬 エンタメ・話題のニュース<br>
+                    🔊 ネイティブ音声付き
+                </p>
             </div>
         </div>
     </div>
 
-    <!-- カテゴリー選択画面 -->
-    <div id="categorySelectScreen" class="screen">
-        <div class="container">
-            <div class="title-section">
-                <h2>Choose your news categories</h2>
-                <p class="subtitle-jp">あなたの興味があるカテゴリーを選んでください</p>
-            </div>
-            
-            <div class="category-grid">
-                <div class="category-card" data-category="lifestyle">
-                    <div class="category-icon">🏠</div>
-                    <h4>Lifestyle</h4>
-                    <p>地域・生活</p>
-                </div>
-                
-                <div class="category-card" data-category="society">
-                    <div class="category-icon">🌏</div>
-                    <h4>Society</h4>
-                    <p>社会・文化</p>
-                </div>
-                
-                <div class="category-card" data-category="economy">
-                    <div class="category-icon">📈</div>
-                    <h4>Economy</h4>
-                    <p>経済・ビジネス</p>
-                </div>
-                
-                <div class="category-card" data-category="entertainment">
-                    <div class="category-icon">🎬</div>
-                    <h4>Entertainment</h4>
-                    <p>エンタメ</p>
-                </div>
-                
-                <div class="category-card" data-category="tech">
-                    <div class="category-icon">📰</div>
-                    <h4>Tech</h4>
-                    <p>技術・トレンド</p>
-                </div>
-            </div>
-            
-            <button id="nextButton" class="next-button" disabled>ニュースを読む</button>
-        </div>
-    </div>
-
-    <script src="selection.js"></script>
+    <script src="script.js"></script>
 </body>
 </html>
