@@ -183,6 +183,13 @@ async function searchNewsFromSource(sourceQuery) {
                 throw new Error(`Unknown source: ${source}`);
         }
         
+        // RSS URLが設定されているかチェック
+        if (!rssUrl) {
+            throw new Error(`RSS URL not configured for source: ${source}. Check environment variables.`);
+        }
+        
+        console.log(`🌐 RSS URL: ${rssUrl}`);
+        
         // RSSを取得
         const feed = await parser.parseURL(rssUrl);
         console.log(`📰 ${sourceName}から${feed.items.length}件のニュースを取得`);
@@ -235,7 +242,7 @@ async function searchNewsFromSource(sourceQuery) {
         console.error(`❌ ${source} RSS error:`, {
             message: error.message,
             stack: error.stack,
-            url: url,
+            url: rssUrl,
             source: source
         });
         
